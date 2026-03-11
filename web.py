@@ -3,10 +3,40 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import os
+import urllib.request
 
 # --- CONFIGURARE PAGINA ---
-st.set_page_config(page_title="DS/HD 60364 Calculator", layout="wide")
+st.set_page_config(page_title="Calculator", layout="wide")
+# --- 2. SECURITATE: VERIFICARE PAROLA ---
+def check_password():
+    """Returneaza True daca parola este corecta."""
+    
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
 
+    if st.session_state["password_correct"]:
+        return True
+
+    # Afisam ecranul de logare
+    st.title("🔐")
+    parola_introdusa = st.text_input("Password", type="password")
+    
+    if st.button("Log In"):
+        # Verificam parola din Secrets
+        if parola_introdusa == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            st.rerun() # Reincarcam pagina ca sa dispara ecranul de logare
+        else:
+            st.error("😕 Incorrect- please try again")
+    
+    return False
+
+# Daca parola NU este corecta, oprim executia AICI
+if not check_password():
+    st.stop()
+
+# --- DE AICI INCOLO INCEPE CODUL APLICATIEI TALE ---
+# (Definirea tabelelor, meniul lateral, modulele etc.)
 # --- BAZA DE DATE TABELE (EXACT PDF TABLES) ---
 def get_ds60364_data(insulation, loaded_cond):
     if insulation == "PVC":
@@ -44,22 +74,27 @@ def get_ds60364_data(insulation, loaded_cond):
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", use_container_width=True)
 
-st.sidebar.title("Engineering Suite")
-module = st.sidebar.radio("Navigare", [
+st.sidebar.title("Calculator")
+module = st.sidebar.radio("", [
     "1. Short Circuit", 
     "2. Cable Sizing", 
     "3. Voltage Drop & Dimensioning", 
-    "4. Cable Capacity Lookup"
+    "4. Cable Capacity",
+    "5. Parallel Cable Load",
+    "6. Converter"
+    
+    
 ])
 
 st.sidebar.markdown("---")
-st.sidebar.caption("*Built and Maintained by Ionut Vieru*")
+st.sidebar.caption("*Built and Maintained - Ionut Vieru*")
+# ==========================================
 
 # ==========================================
 # MODULE 1: SHORT CIRCUIT
 # ==========================================
 if module == "1. Short Circuit":
-    st.header("Short Circuit at Transformer")
+    st.header("Short Circuit for Transformer")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -72,40 +107,79 @@ if module == "1. Short Circuit":
         
     if st.button("Calculate & Show Graph"):
         try:
+            # Calculele tale matematice
             IrT = (s_r * 1000) / (np.sqrt(3) * u_n)
             Ikp_s = i_k_pri.lower()
-            
             ZQ = 0 if Ikp_s in ['inf', 'infinity'] else (1.05 * u_n**2) / (np.sqrt(3) * u_pri * 1000 * float(Ikp_s) * 1000)
             ZT = (u_k / 100) * (u_n**2 / (s_r * 1000))
             RT = 0.1 * ZT
             XT = np.sqrt(ZT**2 - RT**2)
             Ikmax = (1.05 * u_n) / (np.sqrt(3) * (ZQ + ZT))
+            # Calcul curent de scurtcircuit maxim secundar
+            Ikmax = (1.05 * u_n) / (np.sqrt(3) * (ZQ + ZT))
             
-            st.success(f"**Nominal current (IrT):** {IrT:.1f} A  \n**I_k_max'':** {Ikmax/1000:.2f} kA")
+            # --- NOU: Calcul I_peak (ip) ---
+            # Factorul kappa (κ) depinde de raportul R/X sau X/R
+            if XT > 0:
+                kappa = 1.02 + 0.98 * np.exp(-3 * (RT / XT))
+            else:
+                kappa = 2.0  # Cazul pur reactiv
             
-            # Preluare Plot
+            ipeak = kappa * np.sqrt(2) * Ikmax
+            # --- REZULTATE CU SCRIS MARE ---
+            # Folosim culori contrastante: Albastru inchis pentru etichete, Verde pentru valori
+            rezultat_html = f"""
+            <div style="background-color: #eaf2f8; padding: 32px; border-radius: 10px; border-left: 5px solid #1a5276;">
+                <div style="font-size: 32px; color: #1a5276; margin-bottom: 10px;">
+                    <b>Nominal Current (IrT):</b> <span style="color: #1e8449;">{IrT:.1f} A</span>
+                </div>
+                <div style="font-size: 32px; color: #1a5276; margin-bottom: 10px;">
+                    <b>I_k_max'':</b> <span style="color: #a93226;">{Ikmax/1000:.2f} kA</span>
+                </div>
+                <div style="font-size: 32px; color: #1a5276;">
+                    <b>i_peak (ip):</b> <span style="color: #1e8449;">{ipeak/1000:.2f} kA</span>
+                </div>
+            </div>
+            <br>
+            """
+            st.markdown(rezultat_html, unsafe_allow_html=True)
+            
+            # Parametrii undei
             t = np.linspace(0, 0.06, 1000)
             omega = 2 * np.pi * 50
             phi = np.arctan(XT/RT) if RT != 0 else np.pi/2
             tau = (XT/omega)/RT if RT != 0 else 0.045
             i_tot = np.sqrt(2) * Ikmax * (np.sin(omega*t - phi) + np.sin(phi) * np.exp(-t/tau))
             
-            fig, ax = plt.subplots(figsize=(8, 4))
-            ax.plot(t*1000, i_tot/1000, 'r')
-            ax.axhline(0, color='black', lw=0.5)
-            ax.set_title("Instantaneous Short Circuit Current [kA]")
-            ax.set_xlabel("Time [ms]")
-            ax.grid(True)
+           # 1. Mărim dimensiunea la (5, 3) pentru claritate, dar controlăm afișarea
+            # Adăugăm dpi=300 pentru o rezoluție foarte clară (High Definition)
+            fig, ax = plt.subplots(figsize=(5, 3), dpi=300) 
             
-            st.pyplot(fig)
+            ax.plot(t*1000, i_tot/1000, 'r', linewidth=1.5)
+            ax.axhline(0, color='black', lw=0.8)
+            
+            # 2. Folosim dimensiuni de font rezonabile (nu mai punem 5 sau 6)
+            ax.set_title("Short Circuit Current [kA]", fontsize=10, fontweight='bold')
+            ax.set_xlabel("Time [ms]", fontsize=9)
+            ax.set_ylabel("Current [kA]", fontsize=9)
+            
+            ax.tick_params(axis='both', labelsize=8)
+            ax.grid(True, linestyle='--', alpha=0.7)
+            
+            # 3. Această linie elimină marginile albe inutile
+            plt.tight_layout()
+
+            # 4. Afișăm în Streamlit cu lățime controlată (ca să nu ocupe tot ecranul)
+            st.pyplot(fig, use_container_width=False)
+        # AICI E CHEIA: Trebuie să fie aliniat cu "try" de mai sus!
         except Exception as e:
-            st.error(f"Please check your inputs. Error: {e}")
+            st.error(f"Eroare la calcul: {e}")
 
 # ==========================================
 # MODULE 2: CABLE SIZING
 # ==========================================
 elif module == "2. Cable Sizing":
-    st.header("Cable Sizing (DS/HD 60364-5-52)")
+    st.header("Cable Sizing")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -122,17 +196,40 @@ elif module == "2. Cable Sizing":
         v_cond = st.radio("Loaded Conductors", [3, 2])
         v_neu = st.checkbox("Loaded Neutral (K3 = 0.86)", value=False)
         
-    if st.button("Calculate Sections", type="primary"):
+    if st.button("Calculate", type="primary"):
         try:
+            # --- CALCUL FACTOR DE TEMPERATURA K1 ---
             k1 = 1.0
             if v_ins == "XLPE":
-                if temp > 30: k1 = 0.96 if temp <= 35 else (0.91 if temp <= 40 else (0.87 if temp <= 45 else 0.82))
-            else: 
-                if temp > 30: k1 = 0.94 if temp <= 35 else (0.87 if temp <= 40 else (0.79 if temp <= 45 else 0.71))
-            
+                if temp <= 30: k1 = 1.0
+                elif temp <= 35: k1 = 0.96
+                elif temp <= 40: k1 = 0.91
+                elif temp <= 45: k1 = 0.87
+                elif temp <= 50: k1 = 0.82
+                elif temp <= 55: k1 = 0.76
+                elif temp <= 60: k1 = 0.71
+                elif temp <= 65: k1 = 0.65
+                elif temp <= 70: k1 = 0.58
+                else: k1 = 0.50
+            else: # PVC
+                if temp <= 30: k1 = 1.0
+                elif temp <= 35: k1 = 0.94
+                elif temp <= 40: k1 = 0.87
+                elif temp <= 45: k1 = 0.79
+                elif temp <= 50: k1 = 0.71
+                elif temp <= 55: k1 = 0.61
+                elif temp <= 60: k1 = 0.50
+                else: k1 = 0.40
+
             k3 = 0.86 if v_neu else 1.0
             k_total = k1 * k2 * k3
             
+            # --- AFISARE FACTORI (SCRIS MARE) ---
+            st.info(f"### Temperature correction (k1): **{k1:.2f}** | Total correction (K): **{k_total:.3f}**")
+            
+            # ... restul calculelor tale cu target, load_per_cable etc.
+            
+            # Curentul tinta per cablu
             target = ib / (k_total * n)
             mat_faktor = 1.0 if v_mat == "Cu" else 0.78
             load_per_cable = ib / n
@@ -140,25 +237,39 @@ elif module == "2. Cable Sizing":
             sect = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]
             metoder = get_ds60364_data(v_ins, v_cond)
             
-            out = f"**Required Iz per cable:** > {target:.1f} A | **Total Factor (K):** {k_total:.3f}\n\n"
-            out += "--- \n"
+            out = f"<div style='font-size: 20px;'><b>Required Iz per cable:</b> > {target:.1f} A | <b>Total Factor (K):</b> {k_total:.3f}</div><br><hr><br>"
             
+            # Bucla de cautare a sectiunilor
             for m, vals in metoder.items():
+                # --- REPARARE LINIA 174: Paranteza inchisa corect ---
                 idx = next((i for i, v in enumerate(vals) if v * mat_faktor >= target), -1)
                 
                 if idx != -1 and idx < len(sect):
                     chosen_sect = sect[idx]
                     base_iz = vals[idx] * mat_faktor
                     actual_capacity = base_iz * k_total
+                    procent = (load_per_cable / actual_capacity) * 100
                     
-                    out += f"**{m:<22}:** `{chosen_sect:>4} mm²` [Cap: {actual_capacity:>5.1f} A | Load: {load_per_cable:.1f} A]\n\n"
+                    # --- Stiluri Culori ---
+                    c_m = "color: #1a5276;" # Albastru
+                    c_s = "color: #d35400;" # Portocaliu
+                    c_p = "color: #1e8449;" # Verde
+                    
+                    out += (
+                        f"<div style='font-size: 30px; line-height: 1.6;'>"
+                        f"<span style='{c_m} font-weight: bold;'>{m:<20}:</span> "
+                        f"<span style='{c_s} font-weight: bold; background-color: #fdf2e9; padding: 2px 8px; border-radius: 5px;'>{chosen_sect:>4} mm²</span> "
+                        f"<span style='{c_p} font-weight: bold;'> [Cap: {actual_capacity:>5.1f}A | {procent:.1f}%]</span>"
+                        f"</div><br>"
+                    )
                 else:
-                    out += f"**{m:<22}:** `N/A (>300 mm²)`\n\n"
+                    out += f"<div style='font-size: 30px; color: #a93226; font-weight: bold;'>{m:<20}: N/A (>300 mm²)</div><br>"
             
-            st.info(out)
+            # Afisare Rezultate
+            st.markdown(out, unsafe_allow_html=True)
+            
         except Exception as e:
-            st.error(f"Please check your inputs. Error: {e}")
-
+            st.error(f"Eroare la calcul: {e}")
 # ==========================================
 # MODULE 3: VOLTAGE DROP & DIMENSIONING
 # ==========================================
@@ -173,21 +284,22 @@ elif module == "3. Voltage Drop & Dimensioning":
     
     with col2:
         v_mat = st.radio("Material", ["Cu", "Al"])
-        v_sys = st.selectbox("System Voltage", [12, 24, 230, 400], index=2)
+        v_sys = st.selectbox("System Voltage [V]", [12, 24, 230, 400], index=1)
+        # --- NOU: Selecție Tip Curent ---
+        v_type = st.radio("Current Type", ["AC", "DC"], horizontal=True)
         
     if st.button("Calculate Voltage Drop", type="primary"):
         try:
             rho = 0.0225 if v_mat == "Cu" else 0.036
             
-            if v_sys in [12, 24]:
-                factor = 2
-                cos_phi = 1.0
-            elif v_sys == 230:
-                factor = 2
-                cos_phi = 0.85
-            else: 
-                factor = np.sqrt(3)
-                cos_phi = 0.85
+            # --- LOGICĂ ACTUALIZATĂ ---
+            if v_type == "DC":
+                factor = 2 # Dus-întors
+                cos_phi = 1.0 # Nu există defazaj în DC
+            else: # AC
+                # Pentru AC, verificăm dacă e Monofazat sau Trifazat
+                factor = np.sqrt(3) if v_sys == 400 else 2
+                cos_phi = 0.85 # Factor standard pentru motoare/sarcini inductive
 
             dV_volts = (factor * e_len * e_curr * rho * cos_phi) / e_sect
             du_percent = (dV_volts / v_sys) * 100
@@ -222,10 +334,10 @@ elif module == "3. Voltage Drop & Dimensioning":
             st.error(f"Please check your inputs. Error: {e}")
 
 # ==========================================
-# MODULE 4: CABLE CAPACITY LOOKUP
+# MODULE 4: CABLE CAPACITY
 # ==========================================
-elif module == "4. Cable Capacity Lookup":
-    st.header("Cable Capacity Lookup (DS 60364)")
+elif module == "4. Cable Capacity":
+    st.header("Cable Capacity")
     
     sections_list = [1.5, 2.5, 4.0, 6.0, 10.0, 16.0, 25.0, 35.0, 50.0, 70.0, 95.0, 120.0, 150.0, 185.0, 240.0, 300.0]
     
@@ -249,13 +361,202 @@ elif module == "4. Cable Capacity Lookup":
             if v_mat == "Al" and selected_section < 16:
                 warning = "\n*(Note: Al conductors < 16mm² are rarely allowed)*\n"
 
+            # --- CODUL TAU MODIFICAT PENTRU CULOARE SI BOLD ---
             out = f"### Max Capacity (Iz) | {selected_section} mm² {v_mat} | {v_ins} | {v_cond}-Cond\n"
             out += warning + "\n"
             out += "--- \n"
+            
             for m, vals in metoder.items():
-                out += f"**{m:<24}:** `{vals[idx] * mat_faktor:.1f} A`\n\n"
+                # 1. Calculăm valoarea finală
+                capacitate_finala = vals[idx] * mat_faktor
+                
+                # 2. Cream textul cu formatare HTML (Culoare albastră și Bold)
+                # Am pus culoarea 'blue' si fontul 'bold' folosind CSS.
+                formatted_text = f"<span style='color: blue; font-weight: bold;'>{m:<24}:</span> <span style='color: green; font-weight: bold;'>{capacitate_finala:.1f} A</span>"
+                
+                # 3. Adăugăm în output cu un font mai mare (ex: 20px)
+                out += f"<span style='font-size: 20px;'>{formatted_text}</span><br><br>"
 
-            st.info(out)
+            # --- FOARTE IMPORTANT: Schimbă st.info(out) cu st.markdown ---
+            # Aceasta linie permite afișarea culorilor HTML pe care le-am pus.
+            st.markdown(out, unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"Could not fetch capacity. Error: {e}")
+
+
+# ==========================================
+# MODULE 5: PARALLEL CABLE LOAD
+# ==========================================
+elif module == "5. Parallel Cable Load":
+    st.header("Parallel Load Distribution & Safety Check")
+    st.info("")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        i_total = st.number_input("Total Load Current (I_total) [A]:", value=400.0)
+        num_cables = st.number_input("Number of cables per phase:", min_value=2, max_value=6, value=2)
+    with col2:
+        v_ins = st.radio("Insulation (for capacity check)", ["XLPE", "PVC"], horizontal=True)
+        v_meth = st.selectbox("Installation Method", ["Cable Tray (E)", "In Conduit (B2)", "Direct in Ground (D2)"])
+
+    st.subheader("Cable Specifications:")
+    cable_inputs = []
+    cols = st.columns(num_cables)
+    
+    # Secțiuni disponibile în tabelul tău
+    std_sect = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]
+
+    for i in range(num_cables):
+        with cols[i]:
+            st.markdown(f"**Cable {i+1}**")
+            L = st.number_input(f"Length [m]", value=10.0, key=f"L_p_{i}")
+            S = st.selectbox(f"Sect [mm²]", std_sect, index=10, key=f"S_p_{i}") # Default 95mm2
+            cable_inputs.append({"L": L, "S": S})
+
+    if st.button("Calculate & Check Safety", type="primary"):
+        try:
+            # 1. Calculăm Conductanța G = S / L pentru fiecare
+            total_G = sum(c["S"] / c["L"] for c in cable_inputs)
+            
+            # 2. Luăm datele de capacitate din tabel (presupunem 3 cond. încărcați)
+            metoder_data = get_ds60364_data(v_ins, 3)
+            tab_vals = metoder_data[v_meth]
+
+            out = "### Analysis Results\n---\n"
+            c_black = "color: #000000; font-weight: bold;"
+            c_green = "color: #1e8449; font-weight: bold;"
+            c_red   = "color: #a93226; font-weight: bold;"
+
+            for i, c in enumerate(cable_inputs):
+                # Distribuția curentului (Legea lui Ohm)
+                i_cable = i_total * ((c["S"] / c["L"]) / total_G)
+                
+                # Căutăm capacitatea maximă (Iz) în tabel pentru secțiunea aleasă
+                idx_s = std_sect.index(c["S"])
+                max_iz = tab_vals[idx_s]
+                
+                # Procentul de încărcare real
+                procent = (i_cable / max_iz) * 100
+                color_res = c_red if procent > 100 else c_green
+
+                out += (
+                    f"<div style='font-size: 28px; line-height: 1.5;'>"
+                    f"<span style='{c_black}'>Cable {i+1} ({c['S']}mm², {c['L']}m):</span><br>"
+                    f"Load: <span style='{color_res}'>{i_cable:.1f} A</span> | "
+                    f"Max load: <b>{max_iz:.1f} A</b> | "
+                    f"Load in %: <span style='{color_res}'>{procent:.1f}%</span>"
+                    f"</div><br>"
+                )
+            
+            st.markdown(out, unsafe_allow_html=True)
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# ==========================================
+# MODULE 6: CONVERTER (kVA / kW / A)
+# ==========================================
+elif module == "6. Converter":
+    st.header("⚡ Power & Current Converter")
+    st.info("Enter a value in any field and press the button for automatic conversion.")
+
+    # System settings for calculation
+    col_sys1, col_sys2 = st.columns(2)
+    with col_sys1:
+        v_sys = st.selectbox("System Voltage [V]", [12, 24, 230, 400, 690], index=3)
+    with col_sys2:
+        cos_phi = st.number_input("Power Factor (cos φ)", value=0.85, step=0.05)
+
+    # Session state initialization
+    if 'val_kva' not in st.session_state: st.session_state.val_kva = 0.0
+    if 'val_kw' not in st.session_state: st.session_state.val_kw = 0.0
+    if 'val_amp' not in st.session_state: st.session_state.val_amp = 0.0
+
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        kva_in = st.number_input("Apparent Power [kVA]", value=st.session_state.val_kva, key="kva_input")
+    with col2:
+        kw_in = st.number_input("Active Power [kW]", value=st.session_state.val_kw, key="kw_input")
+    with col3:
+        amp_in = st.number_input("Current [A]", value=st.session_state.val_amp, key="amp_input")
+
+    if st.button("🔄 Transform & Sync", type="primary"):
+        # Detection logic for phase factor
+        factor_faza = np.sqrt(3) if v_sys == 400 else 1.0
+
+
+        
+        # 1. If kVA changed
+        if kva_in != st.session_state.val_kva:
+            st.session_state.val_kva = kva_in
+            st.session_state.val_kw = kva_in * cos_phi
+            st.session_state.val_amp = (kva_in * 1000) / (factor_faza * v_sys)
+            
+        # 2. If kW changed
+        elif kw_in != st.session_state.val_kw:
+            st.session_state.val_kw = kw_in
+            st.session_state.val_kva = kw_in / cos_phi if cos_phi > 0 else 0
+            st.session_state.val_amp = (st.session_state.val_kva * 1000) / (factor_faza * v_sys)
+            
+        # 3. If Amperage changed
+        elif amp_in != st.session_state.val_amp:
+            st.session_state.val_amp = amp_in
+            st.session_state.val_kva = (factor_faza * v_sys * amp_in) / 1000
+            st.session_state.val_kw = st.session_state.val_kva * cos_phi
+            
+        st.rerun()
+
+    # Giant result display in English
+    out_conv = f"""
+    <div style="background-color: #f0f4f8; padding: 20px; border-radius: 10px; border-left: 5px solid #1a5276;">
+        <div style="font-size: 24px; color: #1a5276;"><b>Synchronized Results ({v_sys}V):</b></div>
+        <hr>
+        <div style="font-size: 30px;">💎 <b>{st.session_state.val_kva:.2f} kVA</b></div>
+        <div style="font-size: 30px;">🚀 <b>{st.session_state.val_kw:.2f} kW</b></div>
+        <div style="font-size: 30px;">🔥 <span style="color: #a93226;"><b>{st.session_state.val_amp:.1f} A</b></span></div>
+    </div>
+    """
+    st.markdown(out_conv, unsafe_allow_html=True)
+
+
+
+# ==========================================
+# SUBSOL PAGINA PRINCIPALA (CONTOR INTELIGENT)
+# ==========================================
+st.markdown("---")
+
+# 1. Verificam daca am descarcat deja contorul in aceasta sesiune
+if 'badge_svg' not in st.session_state:
+    try:
+        # Facem request-ul catre server o singura data
+        url = "https://api.visitorbadge.io/api/visitors?path=beregner.streamlit.app&label=VISITS&labelColor=%23000000&countColor=%231e8449"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            # Salvam imaginea SVG direct ca text in memoria Streamlit
+            st.session_state.badge_svg = response.read().decode('utf-8')
+    except Exception as e:
+        # Daca pica serverul lor, nu stricam aplicatia noastra
+        st.session_state.badge_svg = ""
+
+# 2. Afisam contorul din memorie, indiferent de cate ori dam "Calculate"
+if st.session_state.badge_svg:
+    st.markdown(
+        f"""
+        <style>
+        .footer-contor {{
+            position: fixed;
+            bottom: 15px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+        }}
+        </style>
+        <div class="footer-contor">
+            {st.session_state.badge_svg}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
